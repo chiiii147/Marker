@@ -1,7 +1,6 @@
 import ultralytics
 from ultralytics import YOLO
-if __name__ == "__main__"
-{
+if __name__ == "__main__":
     model = YOLO("yolov8n.pt")
     model.train(
         data = "dataset.yaml",
@@ -35,4 +34,3 @@ if __name__ == "__main__"
         auto_augment = None,
         erasing = 0.5,
     )
-}
