@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 
 # Load the model
-model = YOLO("yolo26n.pt")
+model = YOLO("yolo8n.pt")
 
 # Run the evaluation
 results = model.val(data="coco8.yaml")
