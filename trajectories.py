@@ -30,9 +30,9 @@ def draw_trajectories(frame, track_history):
     for id, point in track_history.items():
         if len(point) > 1:
             color = dictinct_color(id)
-            cv2.line(frame, 
-                    (int(point[i-1][0]), int(point[i-1][1])), 
-                    (int(point[i][0]), int(point[i][1])), 2 """thinkness""")
+            for i in range(1, len(point)):
+                cv2.line(frame,  (int(point[i-1][0]), int(point[i-1][1])), 
+                          (int(point[i][0]), int(point[i][1])), 2)
 
 track_history = defauldict(lambda: [])
 
@@ -49,23 +49,24 @@ while cap.isOpen():
         result = model.track(frame, persist = True)
 
         if result.boxes and result.boxes.is_track:
-            boxes = result.boxes.xywh.cpu()
+            boxes = result.boxes.xyxy.cpu()
             track_ids = result.boxes.id.int().cpu().tolist()
             confs = result.boxes.conf.cpu()
 
             frame = result.plot()
 
             for box, track_id, conf in zip(boxes, track_ids, confs):
-                x, y, w, h = float(box)
-                cx = (x + w) / 2.0
-                cy = (y + h) / 2.0
+                x1, y1, x2, y2 = float(box)
+                cx = (x1 + x2)/2.0
+                cy = (y1 + y2)/2.0
                 track_history[track_id].append((cx, cy))
                 color = dictinct_color(track_id)
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                cv2.circle(frame, (int(cx),int(xy)), 4,color, 2)
+                cv2.circle(frame, (int(cx),int(cy)), 4,color, 2)
                 label = f"ID: {track_id}   conf: {conf:.2f}"
                 cv2.putText(frame, label, )#
-                trails
+                track_history[track_id].append((cx,cy))
+                f.write(f"{frame_id}, {track_id}, {cx: .4f}, {cy: .4f}, {conf: .4f}\n")
 
         draw_trajectories(frame, track_history)
         out.write(frame)
@@ -75,5 +76,5 @@ while cap.isOpen():
         if cv2.waitkey(1) & 0xFF == ord("q"):
             break
 f.close()
-cap,release()
+cap.release()
 cv2.destroyAllWindows()
