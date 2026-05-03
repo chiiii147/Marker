@@ -64,7 +64,7 @@ while cap.isOpen():
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
                 cv2.circle(frame, (int(cx),int(xy)), 4,color, 2)
                 label = f"ID: {track_id}   conf: {conf:.2f}"
-                cv2.putText(frame, label, )#
+                cv2.putText(frame, label, )
                 trails
 
         draw_trajectories(frame, track_history)
