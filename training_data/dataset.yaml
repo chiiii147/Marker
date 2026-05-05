@@ -1,4 +1,4 @@
-path: C:/Users/VTX/Documents/GitHub/Marker/dataset
+path: C:\Users\VTX\Documents\GitHub\Marker\training_data\dataset
 
 train: images/train
 val: images/val
