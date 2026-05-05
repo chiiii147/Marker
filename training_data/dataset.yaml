@@ -1,5 +1,7 @@
-train: train/images
-val: val/images
+path: C:/Users/VTX/Documents/GitHub/Marker/dataset
+
+train: images/train
+val: images/val
 
 nc: 1
-names: ["Marker"]
+names: ['marker']

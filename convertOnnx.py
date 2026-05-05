@@ -1,5 +1,5 @@
 from ultralytics import YOLO
-model = YOLO('yolov8n.pt') #change trained model
+model = YOLO('runs/detect/train-14/weights/best.pt') #change trained model
 model.export(format = 'onnx',
              imgsz = 640,
              dynamic = True,
