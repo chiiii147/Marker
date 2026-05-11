@@ -4,10 +4,12 @@
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
 #include <cuda_runtime_api.h>
-#include <cstdlib>
-#include <iostream>
+#include <opencv2/opencv.hpp>
 #include <memory>
+#include <vector>
 #include <string>
+#include <fstream>
+#include <iostream>
 
 class Logger : public nvinfer1::ILogger
 {
@@ -15,10 +17,10 @@ public:
     void log(Severity severity, const char* msg) noexcept override;
 };
 
-class OnnxMarker
+class TensorRTInfer
 {
 public:
-    OnnxMarker(const std::string& Onnxpath)
+    TensorRTInfer(const std::string& Onnxpath)
         : mOnnxpath(Onnxpath)
         , mRuntime(nullptr)
         , mEngine(nullptr)
@@ -26,6 +28,8 @@ public:
     {}
     bool build();
     bool infer();
+    bool preProcess(const cv::Mats& image));
+    bool postProcess(const cv::Mats& image);
 
 private:
     std::string mOnnxpath;
@@ -42,6 +46,17 @@ private:
 
     nvinfer1::Dims mInputDims;
     nvinfer1::Dims mOutputDims;
+
+    void* mDeviceInput = nullptr;
+    void* mDeviceOutput = nullptr;
+
+    void* mHostInput = nullptr;
+    void* mHostOutput = nullptr;
+
+    size_t mInputSize = 0;
+    size_t mOutputSize = 0;
+
+    void* mBindings[2];
 };
 
 #endif
