@@ -37,18 +37,36 @@ bool TensorRTInfer::build()
 
     //auto profileStream = 
 
-    ASSERT(network -> getNbInputs() == 1);
-    mInputDims = network -> getInput(0) -> getDimensions();
-    ASSERT(network -> getNbOutputs() == 1);
-    mOutputDims = network -> getOutput(0) -> getDimensions();
+    if(network -> getNbInputs() != 1)
+        return false;
+
+    if(network -> getNbOutputs() != 1)
+        return false;
+
+    for(int i = 0; i < mEngine -> getNbIOTensors(); i++)
+    {
+        auto const name = mEngine -> getIOTensorName(i);
+        auto mode = mEngine -> getTensorIOMode(name);
+
+        if(mode == nvinfer1::TensorIOMode::kINPUT)
+            mInputDims = mEngine -> getTensorShape(name);
+
+        else if(mode == nvinfer1::TensorIOMode::kOUTPUT)
+            mOutputDims = mEngine -> getTensorShape(name);
+    }
+
+    if(!AllocateMemory())
+    return false;
 
     return true;
 }
 
-bool TensorRTInfer::constructNetwork(std::unique_ptr<nvinfer1::IBuilder>& builder, std::unique_ptr<nvinfer1::INetworkDefinition>& network,
-                                     std::unique_ptr<nvinfer1::IBuilderConfig>& config, std::unique_ptr<nvonnxparser::IParser>& parser)
+bool TensorRTInfer::constructNetwork(std::unique_ptr<nvinfer1::IBuilder>& builder,
+                                     std::unique_ptr<nvinfer1::INetworkDefinition>& network,
+                                     std::unique_ptr<nvinfer1::IBuilderConfig>& config, 
+                                     std::unique_ptr<nvonnxparser::IParser>& parser)
 {
-    auto parsed = parser->parseFromFile(mOnnxpath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING)));
+    auto parsed = parser->parseFromFile(mOnnxpath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING));
     if(!parsed) return false;
 
     return true;
@@ -56,55 +74,25 @@ bool TensorRTInfer::constructNetwork(std::unique_ptr<nvinfer1::IBuilder>& builde
 
 bool TensorRTInfer::infer()
 {
-    mContext = std::unique_ptr<nvinfer1::IExecutionContext>(mEngine->createExecutionContext());
-    if(!mContext) return false;
-
-    //Number of IO tensors is the number of input and output tensors for the network from which the engine was built.
-    //The names of the IO tensors can be discovered by calling getIOTensorName(i) for i in 0 to getNbIOTensors()-1.
-    for(int i = 0; i < mEngine -> getNbIOTensors(); i++)
-    {
-        auto const name = mEngine -> getIOTensorName(i);
-        auto mode = mEngine -> getTensorIOMode(name);
-        auto shapes = mEngine -> getTensorShape(name);
-
-        size_t elem = 1;
-        for(int j = 0; j < shapes.nbDims; j++)
-            elem = elem * shapes.d[j];
-
-        if(mode == nvinfer1::TensorIOMode::kINPUT)
-        {
-            mInputSize = elem * sizeof(float);
-            mContext -> setTensorAddress(name, mDeviceInput);
-        }
-        else
-        {
-            mOutputSize = elem * sizeof(float);
-            mContext -> setTensorAddress(name, mDeviceOutput);
-        }
-    }
-    mHostInput = new float[mInputSize / sizeof(float)];
-    mHostOutput = new float[mOutputSize / sizeof(float)];
     
-    mBindings[0] = mDeviceInput;
-    mBindings[1] = mDeviceOutput;
-    
-    cudaMalloc(&mDeviceInput, mInputSize);
-    cudaMalloc(&mDeviceOutput, mOutputSize);
-
-    cudaMemcpy(mDeviceInput, mHostInput, mInputSize, cudaMemcpyHostToDevice);
+    if(cudaMemcpyAsync(mDeviceInput, mHostInput, mInputSize, cudaMemcpyHostToDevice, mStream) != cudaSuccess)
+        return false;
         
-    bool status = mContext -> executeV2(mBindings);
+    bool status = mContext -> enqueueV3(mStream);
     if(!status) return false;
 
-    cudaMemcpy(mHostOutput, mDeviceOutput, mOutputSize, cudaMemcpyDeviceToHost);
+    if(cudaMemcpyAsync(mHostOutput, mDeviceOutput, mOutputSize, cudaMemcpyDeviceToHost, mStream) != cudaSuccess)
+        return false;
+
+    cudaStreamSynchronize(mStream);
 
     return true;
 }
 
-bool TensorRTInfer::preProcess(const cv::Mats& image)
+bool TensorRTInfer::preProcess(const cv::Mat& image)
 {
     const int inputH = mInputDims.d[2];
-    const int mInputW = mInputDims.d[3];
+    const int inputW = mInputDims.d[3];
 
     cv::Mat resized;
     cv::resize(image, resized, cv::Size(inputW, inputH));
@@ -112,26 +100,22 @@ bool TensorRTInfer::preProcess(const cv::Mats& image)
     resized.convertTo(resized, CV_32F, 1.0 / 255);
 
     std::vector<cv::Mat> chw(3);
-    for(int i = 0, i < 3, i++)
-        chw[i] = cv::Mat(inputH, inputW, CV_32F, mHostInput + i * inputH * inputW);
+    for(int i = 0; i < 3; i++)
+        chw[i] = cv::Mat(inputH, inputW, CV_32F, static_cast<float*>(mHostInput) + i * inputH * inputW);
 
     cv::split(resized, chw);
 
     return true;
 }
 
-bool processOutput(
-    const samplesCommon::BufferManager& buffers,
-    const std::string& outputTensorName,
-    std::vector<Detection>& detections)
+bool TensorRTInfer::postProcess(std::vector<Detection>& detections)
 {
-    float* output = static_cast<float*>(
-        buffers.getHostBuffer(outputTensorName));
+    float* output = static_cast<float*>(mHostOutput);
 
     const int numDetections = 300;
     const int elementsPerDetection = 6;
 
-    const float confThreshold = 0.5f;
+    const float confThreshold = 0.75f;
 
     detections.clear();
 
@@ -166,4 +150,63 @@ bool processOutput(
     }
 
     return true;
+}
+
+bool TensorRTInfer::AllocateMemory()
+{
+    mContext = std::shared_ptr<nvinfer1::IExecutionContext>(mEngine->createExecutionContext());
+    if(!mContext) return false;
+
+    if(cudaStreamCreate(&mStream) != cudaSuccess)
+    return false;
+
+    //Number of IO tensors is the number of input and output tensors for the network from which the engine was built.
+    //The names of the IO tensors can be discovered by calling getIOTensorName(i) for i in 0 to getNbIOTensors()-1.
+    for(int i = 0; i < mEngine -> getNbIOTensors(); i++)
+    {
+        auto const name = mEngine -> getIOTensorName(i);
+        auto mode = mEngine -> getTensorIOMode(name);
+        auto shapes = mEngine -> getTensorShape(name);
+
+        size_t elem = 1;
+        for(int j = 0; j < shapes.nbDims; j++)
+            elem = elem * shapes.d[j];
+
+        if(mode == nvinfer1::TensorIOMode::kINPUT)
+        {
+            mInputSize = elem * sizeof(float);
+            if(cudaMalloc(&mDeviceInput, mInputSize) != cudaSuccess)
+            return false;
+
+            mHostInput = new float[mInputSize / sizeof(float)];
+            mContext -> setTensorAddress(name, mDeviceInput);
+        }
+        else
+        {
+            mOutputSize = elem * sizeof(float);
+            if(cudaMalloc(&mDeviceOutput, mOutputSize) != cudaSuccess)
+            return false;
+
+            mHostOutput = new float[mOutputSize / sizeof(float)];
+            mContext -> setTensorAddress(name, mDeviceOutput);
+        }
+    }
+    
+    return true;
+}
+
+TensorRTInfer::~TensorRTInfer()
+{
+    if(mDeviceInput)
+        cudaFree(mDeviceInput);
+    if(mDeviceOutput)
+        cudaFree(mDeviceOutput);
+
+    if(mHostInput)
+        delete[] static_cast<float*>(mHostInput);
+    if(mHostOutput)
+        delete[] static_cast<float*>(mHostOutput);
+
+    if(mStream)
+        cudaStreamDestroy(mStream);
 }
